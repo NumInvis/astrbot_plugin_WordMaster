@@ -118,7 +118,7 @@ class GameSession:
         return max(0, int(remaining))
 
 
-@register("astrbot_plugin_wordmaster", "NumInvis", "WordMaster - 词汇大师游戏插件", "2.0.0")
+@register("astrbot_plugin_WordMaster", "NumInvis", "WordMaster - 猜词小游戏集合", "1.0.0")
 class WordMasterPlugin(Star):
     """WordMaster 词汇大师游戏插件"""
     
