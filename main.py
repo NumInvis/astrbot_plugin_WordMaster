@@ -1,8 +1,13 @@
 """
 WordMaster - 词汇大师游戏插件
 移植自 nonebot-plugin-wordle 和 nonebot-plugin-handle
-版本: 1.2.0
+版本: 2.0.0
 功能: Wordle英文猜单词 + Handle汉字猜成语（多人限时对战模式）
+
+使用开源库:
+- NLTK: 英文单词库
+- pypinyin: 汉字转拼音
+- chinese-xinhua: 成语数据库 (GitHub: pwxcoo/chinese-xinhua)
 """
 
 import asyncio
@@ -154,9 +159,15 @@ class GameSession:
         return sum(1 for uid, _, _ in self.guesses if uid == user_id)
 
 
-@register("astrbot_plugin_WordMaster", "NumInvis", "WordMaster - 猜词小游戏集合", "1.2.0")
+@register("astrbot_plugin_WordMaster", "NumInvis", "WordMaster - 猜词小游戏集合", "2.0.0")
 class WordMasterPlugin(Star):
-    """WordMaster 词汇大师游戏插件"""
+    """WordMaster 词汇大师游戏插件
+    
+    使用开源库:
+    - NLTK: 英文单词库 (nltk.corpus.words)
+    - pypinyin: 汉字转拼音 (https://github.com/mozillazg/python-pinyin)
+    - chinese-xinhua: 成语数据库 (https://github.com/pwxcoo/chinese-xinhua)
+    """
     
     def __init__(self, context: Context):
         super().__init__(context)
@@ -172,544 +183,233 @@ class WordMasterPlugin(Star):
         self.data_dir = StarTools.get_data_dir()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
-        # 加载数据
-        self.word_list: List[str] = []
-        self.idiom_data: Dict[str, Dict] = {}  # 成语数据 {成语: {pinyin, meaning}}
-        self._load_all_data()
+        # 数据缓存
+        self.word_list: List[str] = []           # 英文单词列表
+        self.idiom_data: Dict[str, Dict] = {}    # 成语数据 {成语: {pinyin, meaning}}
+        
+        # 初始化
+        self._init_libraries()
         self._load_stats()
         
-        logger.info(f"WordMaster 词汇大师插件已初始化 v1.2.0")
+        logger.info(f"WordMaster 词汇大师插件已初始化 v2.0.0")
         logger.info(f"  - 单词库: {len(self.word_list)} 个")
         logger.info(f"  - 成语库: {len(self.idiom_data)} 个")
     
-    def _load_all_data(self):
-        """加载所有数据"""
-        self._load_word_list()
-        self._load_idiom_data()
+    def _init_libraries(self):
+        """初始化开源库"""
+        self._init_nltk_words()
+        self._init_idioms()
     
-    def _load_word_list(self):
-        """加载英文单词列表 - 使用内置常用单词 + 尝试从文件加载"""
-        # 内置常用5-8字母单词（约2000个常用词）
-        builtin_words = self._get_builtin_words()
+    def _init_nltk_words(self):
+        """使用NLTK初始化英文单词库"""
+        try:
+            from nltk.corpus import words
+            import nltk
+            
+            # 尝试下载words数据包
+            try:
+                nltk.data.find('corpora/words')
+            except LookupError:
+                logger.info("正在下载NLTK words数据包...")
+                nltk.download('words', quiet=True)
+            
+            # 获取所有英文单词
+            all_words = words.words()
+            
+            # 过滤5-8字母的单词（只保留纯字母）
+            self.word_list = [
+                w.lower() for w in all_words 
+                if 5 <= len(w) <= 8 and w.isalpha() and w.isascii()
+            ]
+            
+            # 去重
+            self.word_list = list(set(self.word_list))
+            
+            logger.info(f"NLTK单词库加载完成，共 {len(self.word_list)} 个单词")
+            
+        except ImportError:
+            logger.warning("NLTK未安装，尝试安装...")
+            self._install_and_retry_nltk()
+        except Exception as e:
+            logger.error(f"加载NLTK单词库失败: {e}")
+            self._use_fallback_words()
+    
+    def _install_and_retry_nltk(self):
+        """安装NLTK并重试"""
+        try:
+            import subprocess
+            import sys
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "nltk", "-q"])
+            
+            # 重新导入
+            from nltk.corpus import words
+            import nltk
+            nltk.download('words', quiet=True)
+            
+            all_words = words.words()
+            self.word_list = [
+                w.lower() for w in all_words 
+                if 5 <= len(w) <= 8 and w.isalpha() and w.isascii()
+            ]
+            self.word_list = list(set(self.word_list))
+            logger.info(f"NLTK安装并加载完成，共 {len(self.word_list)} 个单词")
+        except Exception as e:
+            logger.error(f"安装NLTK失败: {e}")
+            self._use_fallback_words()
+    
+    def _use_fallback_words(self):
+        """使用备用单词（从在线API获取或最小集合）"""
+        logger.warning("使用备用单词获取方式...")
         
-        # 尝试从数据文件加载
-        word_file = self.data_dir / "words.json"
+        # 尝试从wordfreq库获取
+        try:
+            from wordfreq import top_n_list
+            words = top_n_list("en", n_top=10000)
+            self.word_list = [
+                w for w in words 
+                if 5 <= len(w) <= 8 and w.isalpha() and w.isascii()
+            ]
+            logger.info(f"wordfreq单词库加载完成，共 {len(self.word_list)} 个单词")
+            return
+        except ImportError:
+            pass
+        
+        # 最后的备用：从文件加载或报错
+        word_file = self.data_dir / "words_backup.json"
         if word_file.exists():
             try:
                 with open(word_file, "r", encoding="utf-8") as f:
-                    file_words = json.load(f)
-                    if isinstance(file_words, list):
-                        self.word_list = list(set(builtin_words + file_words))
-                        logger.info(f"从文件加载了 {len(file_words)} 个单词")
-                    else:
-                        self.word_list = builtin_words
-            except Exception as e:
-                logger.warning(f"加载单词文件失败: {e}")
-                self.word_list = builtin_words
-        else:
-            self.word_list = builtin_words
-            # 保存内置单词到文件
-            self._save_word_list()
+                    self.word_list = json.load(f)
+                logger.info(f"从备份文件加载 {len(self.word_list)} 个单词")
+                return
+            except Exception:
+                pass
         
-        # 过滤只保留5-8字母的单词
-        self.word_list = [w.lower() for w in self.word_list if 5 <= len(w) <= 8 and w.isalpha()]
-        self.word_list = list(set(self.word_list))  # 去重
-        
-        logger.info(f"单词库加载完成，共 {len(self.word_list)} 个单词")
+        # 如果都失败了，记录错误
+        logger.error("无法加载任何单词库，Wordle功能将不可用")
+        self.word_list = []
     
-    def _get_builtin_words(self) -> List[str]:
-        """获取内置常用单词"""
-        return [
-            # 5字母单词
-            "apple", "beach", "chair", "dance", "eagle", "flame", "grape", "house",
-            "image", "judge", "knife", "lemon", "music", "night", "ocean", "piano",
-            "queen", "radio", "sheep", "table", "uncle", "video", "water", "youth",
-            "zebra", "bread", "cloud", "dream", "earth", "fruit", "green", "heart",
-            "island", "juice", "light", "money", "north", "orange", "peace", "quiet",
-            "river", "smile", "tiger", "unity", "voice", "watch", "young", "alarm",
-            "brush", "camel", "dress", "entry", "focus", "glass", "hotel", "input",
-            "jelly", "kite", "lunch", "match", "novel", "order", "paint", "quote",
-            "rider", "scale", "toast", "urban", "visit", "whale", "yield", "zone",
-            "about", "above", "abuse", "actor", "acute", "admit", "adopt", "adult",
-            "after", "again", "agent", "agree", "ahead", "alarm", "album", "alert",
-            "alike", "alive", "allow", "alone", "along", "alter", "among", "anger",
-            "angle", "angry", "apart", "apple", "apply", "arena", "argue", "arise",
-            "array", "aside", "asset", "audio", "audit", "avoid", "award", "aware",
-            "badly", "baker", "bases", "basic", "basis", "beach", "began", "begin",
-            "begun", "being", "below", "bench", "billy", "birth", "black", "blame",
-            "blind", "block", "blood", "board", "boost", "booth", "bound", "brain",
-            "brand", "bread", "break", "breed", "brief", "bring", "broad", "broke",
-            "brown", "build", "built", "buyer", "cable", "calm", "canal", "carry",
-            "catch", "cause", "chain", "chair", "chart", "chase", "cheap", "check",
-            "chest", "chief", "child", "china", "chose", "civil", "claim", "class",
-            "clean", "clear", "click", "clock", "close", "coach", "coast", "could",
-            "count", "court", "cover", "craft", "crash", "cream", "crime", "cross",
-            "crowd", "crown", "curve", "daily", "dance", "dated", "dealt", "death",
-            "debut", "delay", "depth", "doing", "doubt", "dozen", "draft", "drama",
-            "drawn", "dream", "dress", "drill", "drink", "drive", "drove", "dying",
-            "early", "earth", "eight", "elite", "empty", "enemy", "enjoy", "enter",
-            "entry", "equal", "error", "event", "every", "exact", "exist", "extra",
-            "faith", "false", "fault", "fiber", "field", "fifth", "fifty", "fight",
-            "final", "first", "fixed", "flash", "fleet", "floor", "fluid", "focus",
-            "force", "forth", "forty", "forum", "found", "frame", "frank", "fraud",
-            "fresh", "front", "fruit", "fully", "funny", "giant", "given", "glass",
-            "globe", "going", "grace", "grade", "grand", "grant", "grass", "great",
-            "green", "gross", "group", "grown", "guard", "guess", "guest", "guide",
-            "happy", "heart", "heavy", "hello", "help", "hence", "horse", "hotel",
-            "house", "human", "ideal", "image", "index", "inner", "input", "issue",
-            "japan", "joint", "jones", "judge", "known", "label", "large", "laser",
-            "later", "laugh", "layer", "learn", "lease", "least", "leave", "legal",
-            "level", "light", "limit", "links", "lives", "local", "logic", "loose",
-            "lower", "lucky", "lunch", "lying", "magic", "major", "maker", "march",
-            "maria", "match", "maybe", "mayor", "meant", "media", "metal", "might",
-            "minor", "minus", "mixed", "model", "money", "month", "moral", "motor",
-            "mount", "mouse", "mouth", "movie", "music", "needs", "never", "newly",
-            "night", "noise", "north", "noted", "novel", "nurse", "occur", "ocean",
-            "offer", "often", "order", "other", "ought", "paint", "panel", "paper",
-            "party", "peace", "phase", "phone", "photo", "piece", "pilot", "pitch",
-            "place", "plain", "plane", "plant", "plate", "point", "pound", "power",
-            "press", "price", "pride", "prime", "print", "prior", "prize", "proof",
-            "proud", "prove", "queen", "quick", "quiet", "quite", "radio", "raise",
-            "range", "rapid", "ratio", "reach", "ready", "refer", "right", "rival",
-            "river", "robin", "robot", "round", "route", "royal", "rural", "scale",
-            "scene", "scope", "score", "seal", "search", "season", "seat", "second",
-            "secret", "section", "sector", "secure", "see", "seed", "seek", "seem",
-            "seen", "seize", "select", "sell", "send", "sense", "sent", "sequence",
-            "series", "serious", "serve", "service", "session", "set", "setting",
-            "settle", "settlement", "seven", "several", "severe", "sex", "sexual",
-            "shake", "shall", "shape", "share", "sharp", "she", "sheet", "shelf",
-            "shell", "shelter", "shift", "shine", "ship", "shirt", "shock", "shoe",
-            "shoot", "shop", "shopping", "shore", "short", "shot", "should", "shoulder",
-            "shout", "show", "shower", "shrug", "shut", "sick", "side", "sigh",
-            "sight", "sign", "signal", "signature", "significance", "significant",
-            "silence", "silent", "silver", "similar", "similarly", "simple", "simply",
-            "sin", "since", "sing", "singer", "single", "sink", "sir", "sister",
-            "sit", "site", "situation", "six", "size", "ski", "skill", "skin",
-            "sky", "slave", "sleep", "slice", "slide", "slight", "slightly", "slip",
-            "slow", "slowly", "small", "smart", "smell", "smile", "smoke", "smooth",
-            "snap", "snow", "so", "soccer", "social", "society", "soft", "software",
-            "soil", "solar", "soldier", "solid", "solution", "solve", "some", "somebody",
-            "somehow", "someone", "something", "sometimes", "somewhat", "somewhere",
-            "son", "song", "soon", "sophisticated", "sorry", "sort", "soul", "sound",
-            "soup", "source", "south", "southern", "space", "spanish", "speak", "speaker",
-            "special", "specialist", "species", "specific", "specifically", "specify",
-            "speech", "speed", "spend", "spending", "spin", "spirit", "spiritual",
-            "split", "spokesman", "sport", "spot", "spread", "spring", "square",
-            "squeeze", "stability", "stable", "staff", "stage", "stair", "stake",
-            "stand", "standard", "standing", "star", "stare", "start", "state",
-            "statement", "station", "statistics", "status", "stay", "steady", "steal",
-            "steel", "step", "stick", "still", "stir", "stock", "stomach", "stone",
-            "stop", "storage", "store", "storm", "story", "straight", "strange",
-            "stranger", "strategic", "strategy", "stream", "street", "strength",
-            "strengthen", "stress", "stretch", "strike", "string", "strip", "stroke",
-            "strong", "strongly", "structure", "struggle", "student", "studio",
-            "study", "stuff", "stupid", "style", "subject", "submit", "subsequent",
-            "substance", "substantial", "succeed", "success", "successful", "successfully",
-            "such", "sudden", "suddenly", "sue", "suffer", "sufficient", "sugar",
-            "suggest", "suggestion", "suicide", "suit", "summer", "summit", "sun",
-            "super", "supply", "support", "supporter", "suppose", "supposed", "supreme",
-            "sure", "surely", "surface", "surgery", "surprise", "surprised", "surprising",
-            "surprisingly", "surround", "survey", "survival", "survive", "survivor",
-            "suspect", "sustain", "swear", "sweep", "sweet", "swim", "swing", "switch",
-            "symbol", "symptom", "system", "table", "tablespoon", "tactic", "tail",
-            "take", "tale", "talent", "talk", "tall", "tank", "tap", "tape", "target",
-            "task", "taste", "tax", "taxpayer", "tea", "teach", "teacher", "teaching",
-            "team", "tear", "teaspoon", "technical", "technique", "technology", "teen",
-            "teenager", "telephone", "telescope", "television", "tell", "temperature",
-            "temporary", "ten", "tend", "tendency", "tennis", "tension", "tent",
-            "term", "terms", "terrible", "territory", "terror", "terrorism", "terrorist",
-            "test", "testify", "testimony", "testing", "text", "than", "thank",
-            "thanks", "that", "the", "theater", "their", "them", "theme", "themselves",
-            "then", "theory", "therapy", "there", "therefore", "these", "they",
-            "thick", "thin", "thing", "think", "thinking", "third", "thirty", "this",
-            "those", "though", "thought", "thousand", "threat", "threaten", "three",
-            "throat", "through", "throughout", "throw", "thus", "ticket", "tie", "tight",
-            "time", "tiny", "tip", "tire", "tired", "tissue", "title", "to", "tobacco",
-            "today", "toe", "together", "tomato", "tomorrow", "tone", "tongue", "tonight",
-            "too", "tool", "tooth", "top", "topic", "toss", "total", "totally", "touch",
-            "tough", "tour", "tourist", "tournament", "toward", "towards", "tower",
-            "town", "toy", "trace", "track", "trade", "tradition", "traditional",
-            "traffic", "tragedy", "trail", "train", "training", "transfer", "transform",
-            "transformation", "transition", "translate", "transportation", "travel",
-            "treat", "treatment", "treaty", "tree", "tremendous", "trend", "trial",
-            "tribe", "trick", "trip", "troop", "trouble", "truck", "true", "truly",
-            "trust", "truth", "try", "tube", "tunnel", "turn", "tv", "twelve",
-            "twenty", "twice", "twin", "two", "type", "typical", "typically", "ugly",
-            "ultimate", "ultimately", "unable", "uncle", "under", "undergo", "understand",
-            "understanding", "unfortunately", "uniform", "union", "unique", "unit",
-            "united", "universal", "universe", "university", "unknown", "unless",
-            "unlike", "unlikely", "until", "unusual", "up", "upon", "upper", "urban",
-            "urge", "us", "use", "used", "useful", "user", "usual", "usually",
-            "utility", "vacation", "valley", "valuable", "value", "variable", "variation",
-            "variety", "various", "vary", "vast", "vegetable", "vehicle", "venture",
-            "version", "versus", "very", "vessel", "veteran", "via", "victim", "victory",
-            "video", "view", "viewer", "village", "violate", "violation", "violence",
-            "violent", "virtually", "virtue", "virus", "visible", "vision", "visit",
-            "visitor", "visual", "vital", "voice", "volume", "volunteer", "vote",
-            "voter", "vs", "vulnerable", "wage", "wait", "wake", "walk", "wall",
-            "wander", "want", "war", "warm", "warn", "warning", "wash", "waste",
-            "watch", "water", "wave", "way", "we", "weak", "wealth", "wealthy",
-            "weapon", "wear", "weather", "wedding", "week", "weekend", "weekly",
-            "weigh", "weight", "welcome", "welfare", "well", "west", "western", "wet",
-            "what", "whatever", "wheel", "when", "whenever", "where", "whereas",
-            "whether", "which", "while", "whisper", "white", "who", "whole", "whom",
-            "whose", "why", "wide", "widely", "widespread", "wife", "wild", "will",
-            "willing", "win", "wind", "window", "wine", "wing", "winner", "winter",
-            "wipe", "wire", "wisdom", "wise", "wish", "with", "withdraw", "within",
-            "without", "witness", "woman", "wonder", "wonderful", "wood", "wooden",
-            "word", "work", "worker", "working", "works", "workshop", "world",
-            "worried", "worry", "worth", "would", "wound", "wrap", "write", "writer",
-            "writing", "wrong", "yard", "yeah", "year", "yell", "yellow", "yes",
-            "yesterday", "yet", "yield", "you", "young", "your", "yours", "yourself",
-            "youth", "zone",
-            # 6字母单词
-            "abroad", "accept", "access", "across", "action", "active", "actual",
-            "addition", "adequate", "adjust", "administration", "administrator",
-            "admire", "admission", "admit", "adopt", "adult", "advance", "advanced",
-            "advantage", "adventure", "advertising", "advice", "advise", "adviser",
-            "advocate", "affair", "affect", "afford", "afraid", "african", "after",
-            "afternoon", "again", "against", "agency", "agenda", "agent", "agree",
-            "agreement", "agricultural", "ahead", "aircraft", "airline", "airport",
-            "album", "alcohol", "alive", "alliance", "allow", "almost", "alone",
-            "along", "already", "alter", "although", "always", "amazing", "american",
-            "among", "amount", "analysis", "analyst", "analyze", "ancient", "anger",
-            "angle", "angry", "animal", "anniversary", "announce", "annual", "another",
-            "answer", "anticipate", "anxiety", "anybody", "anymore", "anyone",
-            "anything", "anyway", "anywhere", "apart", "apartment", "apparent",
-            "apparently", "appeal", "appear", "appearance", "apple", "application",
-            "apply", "appoint", "appointment", "appreciate", "approach", "appropriate",
-            "approval", "approve", "architect", "area", "argue", "argument", "arise",
-            "armed", "army", "around", "arrange", "arrangement", "arrest", "arrival",
-            "arrive", "article", "artist", "artistic", "asian", "aside", "asleep",
-            "aspect", "assault", "assert", "assess", "assessment", "asset", "assign",
-            "assignment", "assist", "assistance", "assistant", "associate", "association",
-            "assume", "assumption", "assure", "athlete", "athletic", "atmosphere",
-            "attach", "attack", "attempt", "attend", "attention", "attitude", "attorney",
-            "attract", "attractive", "attribute", "audience", "author", "authority",
-            "auto", "available", "average", "avoid", "award", "aware", "awareness",
-            "awful", "baby", "back", "background", "badly", "balance", "barely",
-            "barrel", "barrier", "baseball", "basic", "basically", "basis", "basket",
-            "basketball", "bathroom", "battery", "battle", "beach", "bean", "bear",
-            "beat", "beautiful", "beauty", "because", "become", "bedroom", "beer",
-            "before", "begin", "beginning", "behavior", "behind", "being", "belief",
-            "believe", "bell", "belong", "below", "belt", "bench", "bend", "beneath",
-            "benefit", "beside", "besides", "best", "better", "between", "beyond",
-            "bible", "bicycle", "bill", "billion", "bind", "biological", "bird",
-            "birth", "birthday", "bitter", "black", "blade", "blame", "blanket",
-            "blind", "block", "blood", "board", "boat", "body", "bomb", "bombing",
-            "bond", "bone", "book", "boom", "boot", "border", "born", "borrow",
-            "boss", "both", "bother", "bottle", "bottom", "boundary", "bowl", "box",
-            "brain", "branch", "brand", "bread", "break", "breakfast", "breast",
-            "breath", "breathe", "brick", "bridge", "brief", "briefly", "bright",
-            "brilliant", "bring", "british", "broad", "broken", "brother", "brown",
-            "brush", "buck", "budget", "build", "building", "bullet", "bunch",
-            "burden", "burn", "bury", "business", "busy", "butter", "button", "buyer",
-            "cabin", "cabinet", "cable", "cake", "calculate", "call", "camera",
-            "camp", "campaign", "campus", "canadian", "cancer", "candidate", "capable",
-            "capacity", "capital", "captain", "capture", "carbon", "card", "care",
-            "career", "careful", "carefully", "carrier", "carry", "case", "cash",
-            "cast", "casualty", "catch", "category", "catholic", "cause", "ceiling",
-            "celebrate", "celebration", "celebrity", "cell", "center", "central",
-            "century", "ceremony", "certain", "certainly", "chain", "chair", "chairman",
-            "challenge", "chamber", "champion", "championship", "chance", "change",
-            "changing", "channel", "chapter", "character", "characteristic", "characterize",
-            "charge", "charity", "chart", "chase", "cheap", "check", "cheek", "cheese",
-            "chef", "chemical", "chest", "chicken", "chief", "child", "childhood",
-            "chinese", "chip", "chocolate", "choice", "cholesterol", "choose",
-            "chronic", "chunk", "church", "cigarette", "circle", "circumstance",
-            "citizen", "city", "civil", "civilian", "claim", "class", "classic",
-            "classroom", "clean", "clear", "clearly", "client", "climate", "climb",
-            "clinic", "clinical", "clock", "close", "closely", "clothes", "cloud",
-            "club", "clue", "cluster", "coach", "coal", "coast", "coat", "code",
-            "coffee", "cognitive", "cold", "collapse", "colleague", "collect",
-            "collection", "collective", "college", "colonial", "color", "column",
-            "combination", "combine", "come", "comedy", "comfort", "comfortable",
-            "command", "commander", "comment", "commercial", "commission", "commit",
-            "commitment", "committee", "common", "communicate", "communication",
-            "community", "company", "compare", "comparison", "compete", "competition",
-            "competitive", "competitor", "complain", "complaint", "complete",
-            "completely", "complex", "complicated", "component", "compose",
-            "composition", "comprehensive", "computer", "concentrate", "concentration",
-            "concept", "concern", "concerned", "concert", "conclude", "conclusion",
-            "concrete", "condition", "conduct", "conference", "confidence",
-            "confident", "confirm", "conflict", "confront", "confusion", "congress",
-            "connect", "connection", "consciousness", "consensus", "consequence",
-            "conservative", "consider", "considerable", "consideration", "consist",
-            "consistent", "constant", "constantly", "constitute", "constitutional",
-            "construct", "construction", "consultant", "consume", "consumer",
-            "consumption", "contact", "contain", "container", "contemporary",
-            "content", "contest", "context", "continue", "contract", "contrast",
-            "contribute", "contribution", "control", "controversial", "controversy",
-            "convention", "conventional", "conversation", "convert", "conviction",
-            "convince", "cook", "cookie", "cooking", "cool", "cooperation", "cop",
-            "cope", "copy", "core", "corn", "corner", "corporate", "corporation",
-            "correct", "correspondent", "cost", "cotton", "couch", "could", "council",
-            "counselor", "count", "counter", "country", "county", "couple", "courage",
-            "course", "court", "cousin", "cover", "coverage", "cow", "crack",
-            "craft", "crash", "crazy", "cream", "create", "creation", "creative",
-            "creature", "credit", "crew", "crime", "criminal", "crisis", "criteria",
-            "critic", "critical", "criticism", "criticize", "crop", "cross", "crowd",
-            "crucial", "cry", "cultural", "culture", "cup", "curious", "current",
-            "currently", "curriculum", "custom", "customer", "cut", "cycle", "dad",
-            "daily", "damage", "dance", "danger", "dangerous", "dark", "darkness",
-            "data", "date", "daughter", "dead", "deal", "dealer", "dear", "death",
-            "debate", "debt", "decade", "decide", "decision", "deck", "declare",
-            "decline", "decrease", "deep", "deeply", "deer", "defeat", "defend",
-            "defendant", "defense", "defensive", "deficit", "define", "definitely",
-            "definition", "degree", "delay", "deliver", "delivery", "demand",
-            "democracy", "democratic", "demonstrate", "demonstration", "deny",
-            "department", "depend", "dependent", "depending", "depict", "depression",
-            "depth", "deputy", "derive", "describe", "description", "desert",
-            "deserve", "design", "designer", "desire", "desk", "desperate",
-            "despite", "destroy", "destruction", "detail", "detailed", "detect",
-            "determine", "develop", "developing", "development", "device", "devote",
-            "dialogue", "die", "diet", "differ", "difference", "different",
-            "differently", "difficult", "difficulty", "dig", "digital", "dimension",
-            "dining", "dinner", "direct", "direction", "directly", "director",
-            "dirt", "dirty", "disability", "disagree", "disappear", "disaster",
-            "discipline", "discourse", "discover", "discovery", "discrimination",
-            "discuss", "discussion", "disease", "dish", "dismiss", "disorder",
-            "display", "dispute", "distance", "distant", "distinct", "distinction",
-            "distinguish", "distribute", "distribution", "district", "diverse",
-            "diversity", "divide", "division", "divorce", "doctor", "document",
-            "domestic", "dominant", "dominate", "door", "double", "doubt", "down",
-            "downtown", "dozen", "draft", "drag", "drama", "dramatic", "dramatically",
-            "draw", "drawing", "dream", "dress", "drink", "drive", "driver", "drop",
-            "drug", "dry", "due", "during", "dust", "duty", "each", "eager", "ear",
-            "early", "earn", "earnings", "earth", "ease", "easily", "east", "eastern",
-            "easy", "eat", "economic", "economics", "economist", "economy", "edge",
-            "edition", "editor", "educate", "education", "educational", "educator",
-            "effect", "effective", "effectively", "efficiency", "efficient",
-            "effort", "egg", "eight", "either", "elderly", "elect", "election",
-            "electric", "electricity", "electronic", "element", "elementary",
-            "eliminate", "elite", "else", "elsewhere", "embrace", "emerge",
-            "emergency", "emission", "emotion", "emotional", "emphasis", "emphasize",
-            "employ", "employee", "employer", "employment", "empty", "enable",
-            "encounter", "encourage", "end", "enemy", "energy", "enforcement",
-            "engage", "engine", "engineer", "engineering", "english", "enhance",
-            "enjoy", "enormous", "enough", "ensure", "enter", "enterprise",
-            "entertainment", "entire", "entirely", "entrance", "entry", "environment",
-            "environmental", "episode", "equal", "equally", "equipment", "era",
-            "error", "escape", "especially", "essay", "essential", "essentially",
-            "establish", "establishment", "estate", "estimate", "ethical", "european",
-            "evaluate", "evaluation", "even", "evening", "event", "eventually",
-            "ever", "every", "everybody", "everyday", "everyone", "everything",
-            "everywhere", "evidence", "evolution", "evolve", "exact", "exactly",
-            "examination", "examine", "example", "exceed", "excellent", "except",
-            "exception", "exchange", "exciting", "executive", "exercise", "exhibit",
-            "exhibition", "exist", "existence", "existing", "expand", "expansion",
-            "expect", "expectation", "expense", "expensive", "experience",
-            "experiment", "expert", "explain", "explanation", "explode", "explore",
-            "explosion", "expose", "exposure", "express", "expression", "extend",
-            "extension", "extensive", "extent", "external", "extra", "extraordinary",
-            "extreme", "extremely", "eye", "fabric", "face", "facility", "fact",
-            "factor", "factory", "faculty", "fade", "fail", "failure", "fair",
-            "fairly", "faith", "fall", "false", "familiar", "family", "famous",
-            "fan", "fancy", "fantasy", "far", "farm", "farmer", "fashion",
-            "fast", "fat", "fate", "father", "fault", "favor", "favorite", "fear",
-            "feature", "federal", "fee", "feed", "feel", "feeling", "fellow",
-            "female", "fence", "festival", "fetch", "few", "fewer", "fiber",
-            "fiction", "field", "fifteen", "fifth", "fifty", "fight", "fighter",
-            "fighting", "figure", "file", "fill", "film", "final", "finally",
-            "finance", "financial", "find", "finding", "fine", "finger", "finish",
-            "fire", "firm", "first", "fish", "fishing", "fit", "fitness", "five",
-            "fix", "flag", "flame", "flat", "flavor", "flee", "flesh", "flight",
-            "float", "floor", "flow", "flower", "fly", "focus", "folk", "follow",
-            "following", "food", "foot", "football", "for", "force", "foreign",
-            "forest", "forever", "forget", "form", "formal", "formation", "former",
-            "formula", "forth", "fortune", "forward", "found", "foundation",
-            "founder", "four", "fourth", "frame", "framework", "free", "freedom",
-            "freeze", "french", "frequency", "frequent", "frequently", "fresh",
-            "friend", "friendly", "friendship", "from", "front", "fruit",
-            "frustration", "fuel", "full", "fully", "fun", "function", "fund",
-            "fundamental", "funding", "funeral", "funny", "furniture", "further",
-            "future", "gain", "galaxy", "gallery", "game", "gang", "gap", "garage",
-            "garden", "garlic", "gas", "gate", "gather", "gay", "gaze", "gear",
-            "gender", "gene", "general", "generally", "generate", "generation",
-            "genetic", "gentleman", "gently", "german", "gesture", "get", "ghost",
-            "giant", "gift", "gifted", "girl", "girlfriend", "give", "given",
-            "glad", "glance", "glass", "global", "glove", "goal", "god", "gold",
-            "golden", "golf", "good", "government", "governor", "grab", "grade",
-            "gradually", "graduate", "grain", "grand", "grandfather", "grandmother",
-            "grant", "grass", "grave", "gray", "great", "greatest", "green", "grocery",
-            "ground", "group", "grow", "growing", "growth", "guarantee", "guard",
-            "guess", "guest", "guide", "guideline", "guilty", "gun", "guy", "habit",
-            "habitat", "hair", "half", "hall", "hand", "handful", "handle", "hang",
-            "happen", "happy", "hard", "hardly", "hat", "hate", "have", "head",
-            "headline", "headquarters", "health", "healthy", "hear", "hearing",
-            "heart", "heat", "heaven", "heavily", "heavy", "heel", "height", "hell",
-            "hello", "help", "helpful", "hence", "her", "here", "heritage", "hero",
-            "herself", "hide", "high", "highlight", "highly", "highway", "hill",
-            "him", "himself", "hip", "hire", "his", "historian", "historic",
-            "historical", "history", "hit", "hold", "hole", "holiday", "holy",
-            "home", "homeless", "honest", "honey", "honor", "hope", "horizon",
-            "horror", "horse", "hospital", "host", "hot", "hotel", "hour", "house",
-            "household", "housing", "how", "however", "huge", "human", "humor",
-            "hundred", "hungry", "hunt", "hunter", "hunting", "hurt", "husband",
-            "hypothesis",
-            # 7-8字母单词
-            "ability", "absence", "academy", "account", "achieve", "acquire",
-            "address", "advance", "adverse", "advised", "adviser", "against",
-            "airline", "airport", "alcohol", "alleged", "already", "analyst",
-            "analyze", "announce", "another", "anxiety", "anxious", "anybody",
-            "anymore", "anyone", "anything", "anyway", "anywhere", "apparent",
-            "appeal", "appear", "appoint", "archive", "arrange", "arrival",
-            "article", "assault", "assumed", "assure", "attempt", "attract",
-            "auction", "average", "backing", "balance", "banking", "barrier",
-            "battery", "bearing", "beating", "because", "bedroom", "believe",
-            "belong", "benefit", "besides", "between", "billion", "binding",
-            "brother", "brought", "burning", "cabinet", "caliber", "calling",
-            "capable", "capital", "captain", "capture", "careful", "carrier",
-            "caution", "ceiling", "central", "centric", "century", "certain",
-            "chamber", "channel", "chapter", "charity", "charlie", "charter",
-            "checked", "chicken", "chronic", "circuit", "civil", "claimed",
-            "clarify", "classic", "climate", "closing", "closure", "clothes",
-            "collect", "college", "combine", "comfort", "command", "comment",
-            "compact", "company", "compare", "compete", "complex", "concept",
-            "concern", "concert", "conduct", "confirm", "connect", "consent",
-            "consist", "consult", "contact", "contain", "content", "contest",
-            "context", "control", "convert", "convince", "cooking", "correct",
-            "council", "counsel", "counter", "country", "courage", "course",
-            "covered", "created", "creator", "crucial", "crystal", "culture",
-            "current", "cutting", "dealing", "decided", "declare", "decline",
-            "defense", "defined", "deficit", "deliver", "demand", "denying",
-            "depart", "depend", "deposit", "depress", "depth", "deputy",
-            "derived", "deserve", "design", "desired", "despite", "destroy",
-            "develop", "devoted", "diamond", "digital", "discuss", "disease",
-            "display", "dispute", "distant", "diverse", "divided", "drawing",
-            "driving", "dynamic", "eastern", "economy", "edition", "elderly",
-            "element", "embrace", "emerged", "emotion", "empathy", "empire",
-            "employ", "endless", "endorse", "enemy", "energy", "enforce",
-            "engage", "engine", "enhance", "enjoyed", "enormous", "ensured",
-            "entered", "entire", "entries", "episode", "equally", "essence",
-            "ethical", "evening", "evident", "exactly", "examine", "example",
-            "excited", "exclude", "excuse", "exhibit", "expansion", "expect",
-            "expert", "explain", "explode", "explore", "express", "extract",
-            "extreme", "factory", "faculty", "failure", "fashion", "feature",
-            "federal", "feeling", "fiction", "fifteen", "fighter", "finally",
-            "finance", "finding", "fishing", "fitness", "foreign", "forever",
-            "formula", "fortune", "forward", "foundation", "founder", "freedom",
-            "further", "gallery", "general", "genetic", "genuine", "gesture",
-            "getting", "glasses", "glimpse", "greater", "grocery", "growing",
-            "habitat", "halfway", "hallway", "handful", "happily", "headache",
-            "healthy", "hearing", "heavily", "helpful", "herself", "highest",
-            "highway", "himself", "history", "holiday", "housing", "however",
-            "hundred", "husband", "illegal", "illness", "imagine", "improve",
-            "include", "initial", "inquiry", "insight", "install", "instant",
-            "instead", "intense", "intention",
-        ]
-    
-    def _save_word_list(self):
-        """保存单词列表到文件"""
-        try:
-            word_file = self.data_dir / "words.json"
-            with open(word_file, "w", encoding="utf-8") as f:
-                json.dump(self.word_list, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.warning(f"保存单词列表失败: {e}")
-    
-    def _load_idiom_data(self):
-        """加载成语数据"""
-        # 内置成语数据
-        builtin_idioms = self._get_builtin_idioms()
-        
-        # 尝试从文件加载
+    def _init_idioms(self):
+        """初始化成语库 - 从chinese-xinhua下载"""
         idiom_file = self.data_dir / "idioms.json"
-        if idiom_file.exists():
-            try:
-                with open(idiom_file, "r", encoding="utf-8") as f:
-                    file_data = json.load(f)
-                    if isinstance(file_data, dict):
-                        self.idiom_data = {**builtin_idioms, **file_data}
-                        logger.info(f"从文件加载了 {len(file_data)} 个成语")
-                    else:
-                        self.idiom_data = builtin_idioms
-            except Exception as e:
-                logger.warning(f"加载成语文件失败: {e}")
-                self.idiom_data = builtin_idioms
-        else:
-            self.idiom_data = builtin_idioms
-            # 保存内置成语到文件
-            self._save_idiom_data()
         
-        logger.info(f"成语库加载完成，共 {len(self.idiom_data)} 个成语")
+        # 检查是否需要下载
+        need_download = False
+        if not idiom_file.exists():
+            need_download = True
+            logger.info("成语库不存在，需要下载...")
+        else:
+            # 检查文件大小（如果太小可能不完整）
+            file_size = idiom_file.stat().st_size
+            if file_size < 1000000:  # 小于1MB认为不完整
+                need_download = True
+                logger.info("成语库文件不完整，重新下载...")
+        
+        if need_download:
+            self._download_idioms()
+        
+        # 加载成语数据
+        self._load_idioms_from_file()
     
-    def _get_builtin_idioms(self) -> Dict[str, Dict]:
-        """获取内置成语数据"""
-        return {
-            "一心一意": {"pinyin": "yī xīn yī yì", "meaning": "心思、意念专一"},
-            "二话不说": {"pinyin": "èr huà bù shuō", "meaning": "不说别的话，立即行动"},
-            "三心二意": {"pinyin": "sān xīn èr yì", "meaning": "又想这样又想那样，犹豫不定"},
-            "四面八方": {"pinyin": "sì miàn bā fāng", "meaning": "各个方面或各个地方"},
-            "五湖四海": {"pinyin": "wǔ hú sì hǎi", "meaning": "指全国各地，有时也指世界各地"},
-            "六神无主": {"pinyin": "liù shén wú zhǔ", "meaning": "形容心慌意乱，拿不定主意"},
-            "七上八下": {"pinyin": "qī shàng bā xià", "meaning": "形容心里慌乱不安"},
-            "八仙过海": {"pinyin": "bā xiān guò hǎi", "meaning": "比喻各自拿出本领或办法，互相竞赛"},
-            "九牛一毛": {"pinyin": "jiǔ niú yī máo", "meaning": "比喻极大数量中极微小的数量"},
-            "十全十美": {"pinyin": "shí quán shí měi", "meaning": "十分完美，毫无欠缺"},
-            "画蛇添足": {"pinyin": "huà shé tiān zú", "meaning": "比喻做了多余的事，非但无益，反而不合适"},
-            "守株待兔": {"pinyin": "shǒu zhū dài tù", "meaning": "比喻死守狭隘经验，不知变通"},
-            "亡羊补牢": {"pinyin": "wáng yáng bǔ láo", "meaning": "比喻出了问题以后想办法补救"},
-            "掩耳盗铃": {"pinyin": "yǎn ěr dào líng", "meaning": "比喻自己欺骗自己"},
-            "买椟还珠": {"pinyin": "mǎi dú huán zhū", "meaning": "比喻没有眼力，取舍不当"},
-            "自相矛盾": {"pinyin": "zì xiāng máo dùn", "meaning": "比喻自己说话做事前后抵触"},
-            "刻舟求剑": {"pinyin": "kè zhōu qiú jiàn", "meaning": "比喻拘泥不知变通"},
-            "狐假虎威": {"pinyin": "hú jiǎ hǔ wēi", "meaning": "比喻依仗别人的势力欺压人"},
-            "井底之蛙": {"pinyin": "jǐng dǐ zhī wā", "meaning": "比喻见识狭窄的人"},
-            "杯弓蛇影": {"pinyin": "bēi gōng shé yǐng", "meaning": "比喻因疑神疑鬼而引起恐惧"},
-            "画龙点睛": {"pinyin": "huà lóng diǎn jīng", "meaning": "比喻作文或说话时在关键地方加上精辟的语句"},
-            "对牛弹琴": {"pinyin": "duì niú tán qín", "meaning": "比喻对不懂道理的人讲道理"},
-            "望梅止渴": {"pinyin": "wàng méi zhǐ kě", "meaning": "比喻愿望无法实现，用空想安慰自己"},
-            "卧薪尝胆": {"pinyin": "wò xīn cháng dǎn", "meaning": "形容人刻苦自励，发奋图强"},
-            "破釜沉舟": {"pinyin": "pò fǔ chén zhōu", "meaning": "比喻下决心不顾一切地干到底"},
-            "草木皆兵": {"pinyin": "cǎo mù jiē bīng", "meaning": "形容人在惊慌时疑神疑鬼"},
-            "纸上谈兵": {"pinyin": "zhǐ shàng tán bīng", "meaning": "比喻空谈理论，不能解决实际问题"},
-            "指鹿为马": {"pinyin": "zhǐ lù wéi mǎ", "meaning": "比喻故意颠倒黑白，混淆是非"},
-            "四面楚歌": {"pinyin": "sì miàn chǔ gē", "meaning": "比喻陷入四面受敌的困境"},
-            "背水一战": {"pinyin": "bèi shuǐ yī zhàn", "meaning": "比喻与敌人决一死战"},
-            "一鸣惊人": {"pinyin": "yī míng jīng rén", "meaning": "比喻平时没有突出的表现，突然做出惊人的成绩"},
-            "一鼓作气": {"pinyin": "yī gǔ zuò qì", "meaning": "比喻趁劲头大的时候鼓起干劲"},
-            "半途而废": {"pinyin": "bàn tú ér fèi", "meaning": "比喻做事不能坚持到底"},
-            "锲而不舍": {"pinyin": "qiè ér bù shě", "meaning": "比喻有恒心，有毅力"},
-            "水滴石穿": {"pinyin": "shuǐ dī shí chuān", "meaning": "比喻只要有恒心，不断努力，事情就一定能成功"},
-            "胸有成竹": {"pinyin": "xiōng yǒu chéng zhú", "meaning": "比喻做事之前已经有通盘的考虑"},
-            "熟能生巧": {"pinyin": "shú néng shēng qiǎo", "meaning": "比喻熟练了就能产生巧办法"},
-            "举一反三": {"pinyin": "jǔ yī fǎn sān", "meaning": "比喻从一件事情类推而知道其他许多事情"},
-            "触类旁通": {"pinyin": "chù lèi páng tōng", "meaning": "比喻掌握了某一事物的知识或规律，进而推知同类事物的知识或规律"},
-            "融会贯通": {"pinyin": "róng huì guàn tōng", "meaning": "把各方面的知识和道理融化汇合，得到全面透彻的理解"},
-            "学以致用": {"pinyin": "xué yǐ zhì yòng", "meaning": "为了实际应用而学习"},
-            "温故知新": {"pinyin": "wēn gù zhī xīn", "meaning": "温习旧的知识，得到新的理解和体会"},
-            "不耻下问": {"pinyin": "bù chǐ xià wèn", "meaning": "乐于向学问或地位比自己低的人学习，而不觉得不好意思"},
-            "孜孜不倦": {"pinyin": "zī zī bù juàn", "meaning": "指工作或学习勤奋不知疲倦"},
-            "精益求精": {"pinyin": "jīng yì qiú jīng", "meaning": "好了还求更好"},
-            "实事求是": {"pinyin": "shí shì qiú shì", "meaning": "指从实际对象出发，探求事物的内部联系及其发展的规律性"},
-            "脚踏实地": {"pinyin": "jiǎo tà shí dì", "meaning": "比喻做事踏实，认真"},
-            "持之以恒": {"pinyin": "chí zhī yǐ héng", "meaning": "长久坚持下去"},
-            "坚持不懈": {"pinyin": "jiān chí bù xiè", "meaning": "坚持到底，一点不松懈"},
-            "全力以赴": {"pinyin": "quán lì yǐ fù", "meaning": "把全部力量都投入进去"},
-            "百发百中": {"pinyin": "bǎi fā bǎi zhòng", "meaning": "形容射箭或打枪准确，每次都命中目标"},
-            "百步穿杨": {"pinyin": "bǎi bù chuān yáng", "meaning": "形容箭法或枪法十分高明"},
-            "百折不挠": {"pinyin": "bǎi zhé bù náo", "meaning": "比喻意志坚强，无论受到多少次挫折，毫不动摇退缩"},
-            "百战百胜": {"pinyin": "bǎi zhàn bǎi shèng", "meaning": "每战必胜，形容所向无敌"},
-            "百依百顺": {"pinyin": "bǎi yī bǎi shùn", "meaning": "什么都依从，形容一切都顺从别人"},
-            "千军万马": {"pinyin": "qiān jūn wàn mǎ", "meaning": "形容雄壮的队伍或浩大的声势"},
-            "千变万化": {"pinyin": "qiān biàn wàn huà", "meaning": "形容变化极多"},
-            "千差万别": {"pinyin": "qiān chā wàn bié", "meaning": "形容各类多，差别大"},
-            "千钧一发": {"pinyin": "qiān jūn yī fà", "meaning": "比喻情况万分危急"},
-            "万紫千红": {"pinyin": "wàn zǐ qiān hóng", "meaning": "形容百花齐放，色彩艳丽"},
-            "万众一心": {"pinyin": "wàn zhòng yī xīn", "meaning": "千万人一条心，形容团结一致"},
-            "万无一失": {"pinyin": "wàn wú yī shī", "meaning": "指非常有把握，绝对不会出差错"},
-            "万象更新": {"pinyin": "wàn xiàng gēng xīn", "meaning": "事物或景象改换了样子，出现了一番新气象"},
-        }
-    
-    def _save_idiom_data(self):
-        """保存成语数据到文件"""
+    def _download_idioms(self):
+        """从chinese-xinhua下载成语数据"""
+        import urllib.request
+        import ssl
+        
+        idiom_file = self.data_dir / "idioms.json"
+        url = "https://raw.githubusercontent.com/pwxcoo/chinese-xinhua/master/data/idiom.json"
+        
         try:
-            idiom_file = self.data_dir / "idioms.json"
-            with open(idiom_file, "w", encoding="utf-8") as f:
-                json.dump(self.idiom_data, f, ensure_ascii=False, indent=2)
+            logger.info("正在从 chinese-xinhua 下载成语数据库...")
+            
+            # 创建SSL上下文（处理某些环境的证书问题）
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            
+            # 下载文件
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0'
+            }
+            request = urllib.request.Request(url, headers=headers)
+            
+            with urllib.request.urlopen(request, context=ssl_context, timeout=30) as response:
+                data = response.read().decode('utf-8')
+                
+                # 验证JSON格式
+                idioms_raw = json.loads(data)
+                
+                # 保存到文件
+                with open(idiom_file, "w", encoding="utf-8") as f:
+                    json.dump(idioms_raw, f, ensure_ascii=False, indent=2)
+                
+                logger.info(f"成语数据库下载完成，共 {len(idioms_raw)} 个成语")
+                
         except Exception as e:
-            logger.warning(f"保存成语数据失败: {e}")
+            logger.error(f"下载成语数据库失败: {e}")
+            # 创建空文件标记
+            if not idiom_file.exists():
+                with open(idiom_file, "w", encoding="utf-8") as f:
+                    json.dump([], f)
+    
+    def _load_idioms_from_file(self):
+        """从文件加载成语数据"""
+        idiom_file = self.data_dir / "idioms.json"
+        
+        if not idiom_file.exists():
+            logger.warning("成语库文件不存在")
+            return
+        
+        try:
+            with open(idiom_file, "r", encoding="utf-8") as f:
+                idioms_raw = json.load(f)
+            
+            # 转换为内部格式 {成语: {pinyin, meaning}}
+            self.idiom_data = {}
+            for item in idioms_raw:
+                if isinstance(item, dict) and "word" in item:
+                    word = item["word"]
+                    # 只保留四字成语
+                    if len(word) == 4:
+                        self.idiom_data[word] = {
+                            "pinyin": item.get("pinyin", ""),
+                            "meaning": item.get("explanation", ""),
+                            "derivation": item.get("derivation", ""),
+                            "example": item.get("example", "")
+                        }
+            
+            logger.info(f"成语库加载完成，共 {len(self.idiom_data)} 个四字成语")
+            
+        except Exception as e:
+            logger.error(f"加载成语库失败: {e}")
+            self.idiom_data = {}
+    
+    def _get_pinyin_with_pypinyin(self, char: str) -> str:
+        """使用pypinyin库获取汉字拼音"""
+        try:
+            from pypinyin import pinyin, Style
+            
+            result = pinyin(char, style=Style.TONE3, heteronym=False)
+            if result and len(result) > 0:
+                return result[0][0]  # 返回第一个读音
+            return char
+        except ImportError:
+            logger.warning("pypinyin未安装，尝试安装...")
+            self._install_pypinyin()
+            return self._get_pinyin_with_pypinyin(char)
+        except Exception as e:
+            logger.error(f"获取拼音失败: {e}")
+            return char
+    
+    def _install_pypinyin(self):
+        """安装pypinyin库"""
+        try:
+            import subprocess
+            import sys
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "pypinyin", "-q"])
+            logger.info("pypinyin安装完成")
+        except Exception as e:
+            logger.error(f"安装pypinyin失败: {e}")
     
     def _get_session_id(self, event: AstrMessageEvent) -> str:
         """获取会话ID"""
@@ -853,57 +553,26 @@ class WordMasterPlugin(Star):
         return None
     
     def _get_pinyin(self, char: str) -> str:
-        """获取汉字拼音"""
-        # 从成语数据中提取拼音
+        """获取汉字拼音 - 优先使用pypinyin"""
+        # 尝试使用pypinyin
+        try:
+            from pypinyin import pinyin, Style
+            result = pinyin(char, style=Style.TONE3, heteronym=False)
+            if result and len(result) > 0:
+                return result[0][0]
+        except:
+            pass
+        
+        # 从成语数据中提取拼音作为后备
         for idiom, data in self.idiom_data.items():
             if char in idiom and "pinyin" in data:
                 pinyin_str = data["pinyin"]
-                # 解析拼音字符串
                 parts = pinyin_str.split()
                 for i, c in enumerate(idiom):
                     if c == char and i < len(parts):
                         return parts[i]
         
-        # 简化的拼音映射（作为后备）
-        pinyin_map = {
-            "一": "yi1", "二": "er4", "三": "san1", "四": "si4", "五": "wu3",
-            "六": "liu4", "七": "qi1", "八": "ba1", "九": "jiu3", "十": "shi2",
-            "心": "xin1", "意": "yi4", "画": "hua4", "蛇": "she2", "添": "tian1",
-            "足": "zu2", "守": "shou3", "株": "zhu1", "待": "dai4", "兔": "tu4",
-            "亡": "wang2", "羊": "yang2", "补": "bu3", "牢": "lao2", "掩": "yan3",
-            "耳": "er3", "盗": "dao4", "铃": "ling2", "买": "mai3", "椟": "du2",
-            "还": "huan2", "珠": "zhu1", "自": "zi4", "相": "xiang1", "矛": "mao2",
-            "盾": "dun4", "刻": "ke4", "舟": "zhou1", "求": "qiu2", "剑": "jian4",
-            "狐": "hu2", "假": "jia3", "虎": "hu3", "威": "wei1", "井": "jing3",
-            "底": "di3", "之": "zhi1", "蛙": "wa1", "杯": "bei1", "弓": "gong1",
-            "影": "ying3", "龙": "long2", "点": "dian3", "睛": "jing1", "对": "dui4",
-            "牛": "niu2", "弹": "tan2", "琴": "qin2", "望": "wang4", "梅": "mei2",
-            "止": "zhi3", "渴": "ke3", "卧": "wo4", "薪": "xin1", "尝": "chang2",
-            "胆": "dan3", "破": "po4", "釜": "fu3", "沉": "chen2", "草": "cao3",
-            "木": "mu4", "皆": "jie1", "兵": "bing1", "纸": "zhi3", "上": "shang4",
-            "谈": "tan2", "指": "zhi3", "鹿": "lu4", "为": "wei2", "马": "ma3",
-            "面": "mian4", "楚": "chu3", "歌": "ge1", "背": "bei4", "水": "shui3",
-            "战": "zhan4", "鸣": "ming2", "惊": "jing1", "人": "ren2", "鼓": "gu3",
-            "作": "zuo4", "气": "qi4", "半": "ban4", "途": "tu2", "而": "er2",
-            "废": "fei4", "锲": "qie4", "不": "bu4", "舍": "she3", "滴": "di1",
-            "石": "shi2", "穿": "chuan1", "胸": "xiong1", "有": "you3", "成": "cheng2",
-            "竹": "zhu2", "熟": "shu2", "能": "neng2", "生": "sheng1", "巧": "qiao3",
-            "举": "ju3", "反": "fan3", "触": "chu4", "类": "lei4", "旁": "pang2",
-            "通": "tong1", "融": "rong2", "会": "hui4", "贯": "guan4", "学": "xue2",
-            "以": "yi3", "致": "zhi4", "用": "yong4", "温": "wen1", "故": "gu4",
-            "知": "zhi1", "新": "xin1", "耻": "chi3", "下": "xia4", "问": "wen4",
-            "孜": "zi1", "倦": "juan4", "精": "jing1", "益": "yi4", "求": "qiu2",
-            "实": "shi2", "事": "shi4", "是": "shi4", "脚": "jiao3", "踏": "ta4",
-            "地": "di4", "持": "chi2", "恒": "heng2", "坚": "jian1", "持": "chi2",
-            "懈": "xie4", "全": "quan2", "力": "li4", "赴": "fu4", "说": "shuo1",
-            "话": "hua4", "方": "fang1", "便": "bian4", "百": "bai3", "发": "fa1",
-            "中": "zhong4", "步": "bu4", "杨": "yang2", "折": "zhe2", "挠": "nao2",
-            "胜": "sheng4", "依": "yi1", "顺": "shun4", "千": "qian1", "军": "jun1",
-            "万": "wan4", "马": "ma3", "变": "bian4", "化": "hua4", "差": "cha1",
-            "别": "bie2", "钧": "jun1", "发": "fa4", "紫": "zi3", "红": "hong2",
-            "众": "zhong4", "象": "xiang4", "更": "geng1", "无": "wu2", "失": "shi1",
-        }
-        return pinyin_map.get(char, char)
+        return char
     
     def _parse_pinyin(self, pinyin: str) -> Tuple[str, str, str]:
         """解析拼音"""
@@ -1027,6 +696,11 @@ class WordMasterPlugin(Star):
             yield event.plain_result("❌ 单词长度必须在 5-8 之间")
             return
         
+        # 检查单词库
+        if not self.word_list:
+            yield event.plain_result("❌ 单词库未加载，请检查NLTK安装")
+            return
+        
         # 获取随机单词
         answer = self._get_random_word(length)
         if not answer:
@@ -1064,6 +738,11 @@ class WordMasterPlugin(Star):
         
         if session_id in self.games and self.games[session_id].state != GameState.FINISHED:
             yield event.plain_result("❌ 当前已有游戏在进行中，请先结束当前游戏")
+            return
+        
+        # 检查成语库
+        if not self.idiom_data:
+            yield event.plain_result("❌ 成语库未加载，请稍后重试")
             return
         
         # 获取随机成语
@@ -1477,11 +1156,16 @@ class WordMasterPlugin(Star):
     @filter.command("wordle帮助")
     async def cmd_help(self, event: AstrMessageEvent):
         """显示帮助信息"""
-        msg = f"""🎮 WordMaster - 词汇大师 游戏帮助 v1.2.0
+        msg = f"""🎮 WordMaster - 词汇大师 游戏帮助 v2.0.0
 
-📚 题库信息:
-• 单词库: {len(self.word_list)} 个单词 (5-8字母)
-• 成语库: {len(self.idiom_data)} 个成语
+📚 开源库依赖:
+• NLTK (nltk.corpus.words) - 英文单词库
+• pypinyin - 汉字转拼音 (github.com/mozillazg/python-pinyin)
+• chinese-xinhua - 成语数据库 (github.com/pwxcoo/chinese-xinhua)
+
+📊 题库信息:
+• 单词库: {len(self.word_list)} 个单词 (NLTK)
+• 成语库: {len(self.idiom_data)} 个成语 (chinese-xinhua)
 
 📋 游戏命令:
 /wordle [长度] - 开始英文猜单词对战
