@@ -1,5 +1,8 @@
-name: astrbot_plugin_WordMaster
-author: NumInvis
-desc: WordMaster - 猜词小游戏集合（Wordle英文猜单词 + Handle汉字猜成语 + 排行榜 + 多人对战）
-version: 1.0.0
-repo: https://github.com/NumInvis/astrbot_plugin_WordMaster
+{
+  "name": "astrbot_plugin_WordMaster",
+  "display_name": "WordMaster",
+  "desc": "功能全面的猜词小游戏集合",
+  "author": "NumInvis",
+  "version": "1.0.0",
+  "repo": "https://github.com/NumInvis/astrbot_plugin_WordMaster"
+}
