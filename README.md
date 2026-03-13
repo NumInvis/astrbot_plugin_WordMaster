@@ -164,9 +164,13 @@
 
 ## 🤝 致谢
 
-- 原项目：[nonebot-plugin-wordle](https://github.com/noneplugin/nonebot-plugin-wordle)
-- 原项目：[nonebot-plugin-handle](https://github.com/noneplugin/nonebot-plugin-handle)
-- 框架支持：[AstrBot](https://github.com/Soulter/AstrBot)
+本项目参考了以下开源项目：
+
+- **参考项目**：[nonebot-plugin-wordle](https://github.com/noneplugin/nonebot-plugin-wordle) - Wordle 猜单词游戏逻辑
+- **参考项目**：[nonebot-plugin-handle](https://github.com/noneplugin/nonebot-plugin-handle) - Handle 汉字猜成语游戏逻辑
+- **框架支持**：[AstrBot](https://github.com/Soulter/AstrBot) - 机器人框架
+
+感谢以上项目的作者们！❤️
 
 ## 📄 License
 
