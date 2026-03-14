@@ -796,10 +796,16 @@ class WordMasterPlugin(Star):
         game = self.games[session_id]
         text = event.message_str.strip()
         
+        # 检查游戏是否正在进行
+        if game.state != GameState.PLAYING:
+            logger.debug(f"游戏状态不是PLAYING，当前状态: {game.state}")
+            return
+        
         # 自动加入游戏：如果用户不在玩家列表中，自动添加
         if user_id not in game.players:
             game.players.append(user_id)
             game.player_names[user_id] = nickname
+            logger.info(f"玩家 {nickname} 自动加入游戏")
         
         # 处理结束命令
         if text in ["结束", "结束游戏", "退出", "quit", "exit"]:
@@ -828,6 +834,7 @@ class WordMasterPlugin(Star):
             return
         
         # 处理猜测
+        logger.debug(f"处理猜测: {text}, 游戏类型: {game.game_type}")
         if game.game_type == GameType.WORDLE:
             async for result in self._handle_wordle_guess(event, game, text, user_id, nickname):
                 yield result
@@ -903,20 +910,23 @@ class WordMasterPlugin(Star):
     
     async def _handle_handle_guess(self, event: AstrMessageEvent, game: GameSession, guess: str, user_id: str, nickname: str):
         """处理 Handle 猜测"""
-        guess = guess.strip()
+        original_guess = guess.strip()
+        logger.info(f"猜成语: 收到输入 '{original_guess}'")
         
-        # 移除所有空格和标点
-        import re
-        guess = re.sub(r'[\s\u3000-\u303F\uFF00-\uFFEF]', '', guess)
+        # 移除所有空格和标点，只保留中文字符
+        filtered_chars = []
+        for char in original_guess:
+            # 检查是否是中文字符 (\u4e00-\u9fff)
+            if '\u4e00' <= char <= '\u9fff':
+                filtered_chars.append(char)
+        guess = ''.join(filtered_chars)
+        
+        logger.info(f"猜成语: 过滤后 '{guess}' ({len(guess)} 字符)")
         
         # 检查长度（中文字符），如果不是4个字符，静默返回不响应
         if len(guess) != 4:
+            logger.info(f"猜成语: 长度不正确，忽略")
             return
-        
-        # 检查是否都是中文字符，如果不是，静默返回不响应
-        for char in guess:
-            if not '\u4e00' <= char <= '\u9fff':
-                return
         
         # 检查是否超时
         remaining_time = game.get_remaining_time()
@@ -931,10 +941,14 @@ class WordMasterPlugin(Star):
             yield event.plain_result("❌ 严格模式下，猜测必须是有效的四字成语")
             return
         
+        logger.info(f"猜成语: 处理猜测 '{guess}'，正确答案 '{game.answer}'")
+        
         game.guesses.append((user_id, nickname, guess))
         
         results = [self._check_handle_guess(g, game.answer) for _, _, g in game.guesses]
         result_text = self._format_handle_result(results)
+        
+        logger.info(f"猜成语: 猜测结果格式化完成")
         
         if guess == game.answer:
             game.state = GameState.FINISHED
