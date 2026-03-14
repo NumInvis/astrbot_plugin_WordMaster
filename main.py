@@ -587,62 +587,29 @@ class WordMasterPlugin(Star):
         else:
             return (pinyin, "", tone)
     
-    def _check_handle_guess(self, guess: str, answer: str) -> List[List[Tuple[str, str]]]:
-        """检查 Handle 猜测结果"""
+    def _check_handle_guess(self, guess: str, answer: str) -> List[Tuple[str, str]]:
+        """检查 Handle 猜测结果 - 简化版，只检查汉字"""
         result = []
         answer_chars = list(answer)
         guess_chars = list(guess)
         
         for i, (g_char, a_char) in enumerate(zip(guess_chars, answer_chars)):
-            char_result = []
-            g_pinyin = self._get_pinyin(g_char)
-            a_pinyin = self._get_pinyin(a_char)
-            g_sheng, g_yun, g_tone = self._parse_pinyin(g_pinyin)
-            a_sheng, a_yun, a_tone = self._parse_pinyin(a_pinyin)
-            
             # 汉字
             if g_char == a_char:
-                char_result.append((g_char, "G"))
+                result.append((g_char, "G"))
             elif g_char in answer_chars:
-                char_result.append((g_char, "Y"))
+                result.append((g_char, "Y"))
             else:
-                char_result.append((g_char, "X"))
-            
-            # 声母
-            if g_sheng == a_sheng:
-                char_result.append((g_sheng, "G"))
-            elif g_sheng and any(self._parse_pinyin(self._get_pinyin(c))[0] == g_sheng for c in answer_chars):
-                char_result.append((g_sheng, "Y"))
-            else:
-                char_result.append((g_sheng if g_sheng else "-", "X"))
-            
-            # 韵母
-            if g_yun == a_yun:
-                char_result.append((g_yun, "G"))
-            elif g_yun and any(self._parse_pinyin(self._get_pinyin(c))[1] == g_yun for c in answer_chars):
-                char_result.append((g_yun, "Y"))
-            else:
-                char_result.append((g_yun if g_yun else "-", "X"))
-            
-            # 声调
-            if g_tone == a_tone:
-                char_result.append((g_tone if g_tone else "-", "G"))
-            elif g_tone and any(self._parse_pinyin(self._get_pinyin(c))[2] == g_tone for c in answer_chars):
-                char_result.append((g_tone, "Y"))
-            else:
-                char_result.append((g_tone if g_tone else "-", "X"))
-            
-            result.append(char_result)
+                result.append((g_char, "X"))
         
         return result
     
-    def _format_handle_result(self, results: List[List[List[Tuple[str, str]]]]) -> str:
-        """格式化 Handle 结果"""
+    def _format_handle_result(self, results: List[List[Tuple[str, str]]]) -> str:
+        """格式化 Handle 结果 - 简化版"""
         lines = []
         for result in results:
             line = ""
-            for item in result:
-                char, status = item
+            for char, status in result:
                 if status == "G":
                     line += f"🟩{char}"
                 elif status == "Y":
@@ -657,20 +624,22 @@ class WordMasterPlugin(Star):
         answer = game.answer
         hints = []
         
+        # 显示完整释义
+        data = self.idiom_data.get(answer, {})
+        meaning = data.get("meaning", "")
+        if meaning:
+            hints.append(f"📖 释义: {meaning}")
+        
         # 随机显示一个字的拼音首字母
         random_pos = random.randint(0, 3)
         char = answer[random_pos]
         pinyin = self._get_pinyin(char)
         sheng = self._parse_pinyin(pinyin)[0]
-        
         hints.append(f"💡 第{random_pos+1}个字拼音首字母: {sheng}")
         
-        # 如果猜测次数超过5次，再给更多提示
+        # 如果猜测次数超过5次，显示正确答案的一个字
         if len(game.guesses) >= 5:
-            data = self.idiom_data.get(answer, {})
-            meaning = data.get("meaning", "")
-            if meaning:
-                hints.append(f"📖 释义提示: {meaning[:10]}...")
+            hints.append(f"🔤 提示: 包含 '{answer[random_pos]}' 字")
         
         return "\n".join(hints)
     
@@ -772,11 +741,14 @@ class WordMasterPlugin(Star):
         game.state = GameState.PLAYING
         game.start_time = time.time()
         
+        # 获取释义
+        meaning = data.get("meaning", "暂无释义")
+        
         msg = f"⚔️ WordMaster - 猜成语游戏开始！\n"
         msg += f"👑 房主: {nickname}\n"
-        msg += f"⏰ 限时: 5分钟 | 🎯 次数: 10次\n"
-        msg += f"🎮 输入四字成语开始猜！\n\n"
-        msg += "其他玩家发送 \"加入\" 即可参与对战"
+        msg += f"⏰ 限时: 5分钟 | 🎯 次数: 10次\n\n"
+        msg += f"📖 释义: {meaning}\n\n"
+        msg += f"🎮 根据释义猜四字成语！"
         
         if strict:
             msg += "\n🔒 严格模式已开启（必须是有效成语）"
@@ -1207,12 +1179,11 @@ class WordMasterPlugin(Star):
 • 🟩 绿色=正确 | 🟨 黄色=位置错 | ⬜ 灰色=不存在
 • 共6次机会
 
-【猜成语 - 汉字猜成语】
-• 猜四字成语
-• 显示: 汉字+声母+韵母+声调
-• 🟩 绿色=完全正确
-• 🟨 黄色=存在但位置/类型不对
-• ⬜ 灰色=不存在
+【猜成语 - 根据释义猜成语】
+• 根据释义猜四字成语
+• 🟩 绿色=字正确位置正确
+• 🟨 黄色=字正确位置错误
+• ⬜ 灰色=字不存在
 • 共10次机会
 
 💡 游戏中指令:
