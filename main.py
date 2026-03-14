@@ -676,9 +676,9 @@ class WordMasterPlugin(Star):
     
     # ========== 命令处理 ==========
     
-    @filter.command("wordle")
+    @filter.command("猜单词")
     async def cmd_wordle(self, event: AstrMessageEvent, length: int = 5):
-        """开始 Wordle 多人限时游戏
+        """开始 Wordle 猜单词游戏
         
         Args:
             length: 单词长度 (5-8)
@@ -719,19 +719,22 @@ class WordMasterPlugin(Star):
         )
         self.games[session_id] = game
         
-        msg = f"⚔️ WordMaster - Wordle 多人限时对战！\n"
+        # 立即开始游戏
+        game.state = GameState.PLAYING
+        game.start_time = time.time()
+        
+        msg = f"⚔️ WordMaster - 猜单词游戏开始！\n"
         msg += f"🔤 单词长度: {length}\n"
         msg += f"👑 房主: {nickname}\n"
         msg += f"⏰ 限时: 5分钟 | 🎯 次数: 6次\n"
-        msg += f"🎮 先猜中者获胜！\n\n"
-        msg += "其他玩家发送 \"加入\" 即可参与对战\n"
-        msg += "房主发送 \"开始\" 开始游戏"
+        msg += f"🎮 输入英文单词开始猜！\n\n"
+        msg += "其他玩家发送 \"加入\" 即可参与对战"
         
         yield event.plain_result(msg)
     
-    @filter.command("handle")
+    @filter.command("猜成语")
     async def cmd_handle(self, event: AstrMessageEvent, strict: bool = False):
-        """开始 Handle 多人限时游戏"""
+        """开始猜成语游戏"""
         session_id = self._get_session_id(event)
         user_id = self._get_user_id(event)
         nickname = self._get_nickname(event)
@@ -765,12 +768,15 @@ class WordMasterPlugin(Star):
         )
         self.games[session_id] = game
         
-        msg = f"⚔️ WordMaster - Handle 多人限时对战！\n"
+        # 立即开始游戏
+        game.state = GameState.PLAYING
+        game.start_time = time.time()
+        
+        msg = f"⚔️ WordMaster - 猜成语游戏开始！\n"
         msg += f"👑 房主: {nickname}\n"
         msg += f"⏰ 限时: 5分钟 | 🎯 次数: 10次\n"
-        msg += f"🎮 先猜中者获胜！\n\n"
-        msg += "其他玩家发送 \"加入\" 即可参与对战\n"
-        msg += "房主发送 \"开始\" 开始游戏"
+        msg += f"🎮 输入四字成语开始猜！\n\n"
+        msg += "其他玩家发送 \"加入\" 即可参与对战"
         
         if strict:
             msg += "\n🔒 严格模式已开启（必须是有效成语）"
@@ -922,9 +928,20 @@ class WordMasterPlugin(Star):
         """处理 Handle 猜测"""
         guess = guess.strip()
         
+        # 移除所有空格和标点
+        import re
+        guess = re.sub(r'[\s\p{P}]', '', guess)
+        
+        # 检查长度（中文字符）
         if len(guess) != 4:
-            yield event.plain_result("❌ 请输入四个汉字")
+            yield event.plain_result(f"❌ 请输入四个汉字，当前输入: {len(guess)} 个字符")
             return
+        
+        # 检查是否都是中文字符
+        for char in guess:
+            if not '\u4e00' <= char <= '\u9fff':
+                yield event.plain_result(f"❌ 输入包含非汉字字符: {char}")
+                return
         
         # 检查是否超时
         remaining_time = game.get_remaining_time()
@@ -1153,7 +1170,7 @@ class WordMasterPlugin(Star):
         
         yield event.plain_result(msg)
     
-    @filter.command("wordle帮助")
+    @filter.command("猜词帮助")
     async def cmd_help(self, event: AstrMessageEvent):
         """显示帮助信息"""
         msg = f"""🎮 WordMaster - 词汇大师 游戏帮助 v2.0.0
@@ -1168,17 +1185,16 @@ class WordMasterPlugin(Star):
 • 成语库: {len(self.idiom_data)} 个成语 (chinese-xinhua)
 
 📋 游戏命令:
-/wordle [长度] - 开始英文猜单词对战
-  示例: /wordle 5
+/猜单词 [长度] - 开始英文猜单词对战
+  示例: /猜单词 6
   长度: 5-8 (默认5)
 
-/handle [--strict] - 开始汉字猜成语对战
-  示例: /handle
+/猜成语 [--strict] - 开始汉字猜成语对战
+  示例: /猜成语
   --strict: 开启严格模式（必须是成语）
 
 ⚔️ 多人对战:
 • 发送 "加入" 参与对战
-• 房主发送 "开始" 开始游戏
 • 先猜中者获胜！
 
 ⏱️ 限时规则:
@@ -1193,16 +1209,16 @@ class WordMasterPlugin(Star):
 
 ⚙️ 其他命令:
 /结束游戏 - 结束当前游戏
-/wordle帮助 - 显示本帮助
+/猜词帮助 - 显示本帮助
 
 🎮 游戏规则:
 
-【Wordle - 英文猜单词】
+【猜单词 - 英文猜单词】
 • 猜指定长度的英文单词
 • 🟩 绿色=正确 | 🟨 黄色=位置错 | ⬜ 灰色=不存在
 • 共6次机会
 
-【Handle - 汉字猜成语】
+【猜成语 - 汉字猜成语】
 • 猜四字成语
 • 显示: 汉字+声母+韵母+声调
 • 🟩 绿色=完全正确
