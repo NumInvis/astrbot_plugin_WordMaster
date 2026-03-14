@@ -6,7 +6,6 @@ WordMaster - 词汇大师游戏插件
 
 使用开源库:
 - NLTK: 英文单词库
-- pypinyin: 汉字转拼音
 - chinese-xinhua: 成语数据库 (GitHub: pwxcoo/chinese-xinhua)
 """
 
@@ -165,7 +164,6 @@ class WordMasterPlugin(Star):
     
     使用开源库:
     - NLTK: 英文单词库 (nltk.corpus.words)
-    - pypinyin: 汉字转拼音 (https://github.com/mozillazg/python-pinyin)
     - chinese-xinhua: 成语数据库 (https://github.com/pwxcoo/chinese-xinhua)
     """
     
@@ -384,33 +382,6 @@ class WordMasterPlugin(Star):
             logger.error(f"加载成语库失败: {e}")
             self.idiom_data = {}
     
-    def _get_pinyin_with_pypinyin(self, char: str) -> str:
-        """使用pypinyin库获取汉字拼音"""
-        try:
-            from pypinyin import pinyin, Style
-            
-            result = pinyin(char, style=Style.TONE3, heteronym=False)
-            if result and len(result) > 0:
-                return result[0][0]  # 返回第一个读音
-            return char
-        except ImportError:
-            logger.warning("pypinyin未安装，尝试安装...")
-            self._install_pypinyin()
-            return self._get_pinyin_with_pypinyin(char)
-        except Exception as e:
-            logger.error(f"获取拼音失败: {e}")
-            return char
-    
-    def _install_pypinyin(self):
-        """安装pypinyin库"""
-        try:
-            import subprocess
-            import sys
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "pypinyin", "-q"])
-            logger.info("pypinyin安装完成")
-        except Exception as e:
-            logger.error(f"安装pypinyin失败: {e}")
-    
     def _get_session_id(self, event: AstrMessageEvent) -> str:
         """获取会话ID"""
         return event.unified_msg_origin
@@ -552,41 +523,6 @@ class WordMasterPlugin(Star):
             return idiom, self.idiom_data[idiom]
         return None
     
-    def _get_pinyin(self, char: str) -> str:
-        """获取汉字拼音 - 优先使用pypinyin"""
-        # 尝试使用pypinyin
-        try:
-            from pypinyin import pinyin, Style
-            result = pinyin(char, style=Style.TONE3, heteronym=False)
-            if result and len(result) > 0:
-                return result[0][0]
-        except:
-            pass
-        
-        # 从成语数据中提取拼音作为后备
-        for idiom, data in self.idiom_data.items():
-            if char in idiom and "pinyin" in data:
-                pinyin_str = data["pinyin"]
-                parts = pinyin_str.split()
-                for i, c in enumerate(idiom):
-                    if c == char and i < len(parts):
-                        return parts[i]
-        
-        return char
-    
-    def _parse_pinyin(self, pinyin: str) -> Tuple[str, str, str]:
-        """解析拼音"""
-        if not pinyin:
-            return ("", "", "")
-        tone = ""
-        if pinyin[-1].isdigit():
-            tone = pinyin[-1]
-            pinyin = pinyin[:-1]
-        if len(pinyin) >= 2:
-            return (pinyin[0], pinyin[1:], tone)
-        else:
-            return (pinyin, "", tone)
-    
     def _check_handle_guess(self, guess: str, answer: str) -> List[Tuple[str, str]]:
         """检查 Handle 猜测结果 - 简化版，只检查汉字"""
         result = []
@@ -630,16 +566,10 @@ class WordMasterPlugin(Star):
         if meaning:
             hints.append(f"📖 释义: {meaning}")
         
-        # 随机显示一个字的拼音首字母
+        # 随机显示一个字的笔画数提示（简单提示）
         random_pos = random.randint(0, 3)
         char = answer[random_pos]
-        pinyin = self._get_pinyin(char)
-        sheng = self._parse_pinyin(pinyin)[0]
-        hints.append(f"💡 第{random_pos+1}个字拼音首字母: {sheng}")
-        
-        # 如果猜测次数超过5次，显示正确答案的一个字
-        if len(game.guesses) >= 5:
-            hints.append(f"🔤 提示: 包含 '{answer[random_pos]}' 字")
+        hints.append(f"💡 第{random_pos+1}个字是: {char}")
         
         return "\n".join(hints)
     
@@ -1138,7 +1068,6 @@ class WordMasterPlugin(Star):
 
 📚 开源库依赖:
 • NLTK (nltk.corpus.words) - 英文单词库
-• pypinyin - 汉字转拼音 (github.com/mozillazg/python-pinyin)
 • chinese-xinhua - 成语数据库 (github.com/pwxcoo/chinese-xinhua)
 
 📊 题库信息:

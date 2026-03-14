@@ -127,7 +127,6 @@
 | 项目 | 说明 |
 |------|------|
 | [NLTK](https://www.nltk.org/) | 英文单词库 (nltk.corpus.words) |
-| [pypinyin](https://github.com/mozillazg/python-pinyin) | 汉字转拼音 |
 | [chinese-xinhua](https://github.com/pwxcoo/chinese-xinhua) | 成语数据库 (31,648个成语) |
 
 ## 📝 更新日志
