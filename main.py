@@ -796,32 +796,10 @@ class WordMasterPlugin(Star):
         game = self.games[session_id]
         text = event.message_str.strip()
         
-        # 处理加入对战
-        if game.state == GameState.WAITING:
-            if text == "加入":
-                if user_id not in game.players:
-                    game.players.append(user_id)
-                    game.player_names[user_id] = nickname
-                    yield event.plain_result(f"✅ {nickname} 加入对战！当前 {len(game.players)} 人")
-                else:
-                    yield event.plain_result(f"⚠️ {nickname} 已经在房间中了")
-                return
-            elif text == "开始" and user_id == game.host_id:
-                if len(game.players) < 1:
-                    yield event.plain_result("❌ 至少需要1名玩家才能开始")
-                    return
-                game.state = GameState.PLAYING
-                game.start_time = time.time()
-                players_list = ", ".join([game.player_names.get(pid, f"玩家{pid}") for pid in game.players])
-                yield event.plain_result(f"🎮 游戏开始！\n👥 参与者: {players_list}\n⏰ 限时5分钟，谁先猜中谁获胜！")
-                return
-        
-        if game.state != GameState.PLAYING:
-            return
-        
-        # 检查是否是房间内玩家
+        # 自动加入游戏：如果用户不在玩家列表中，自动添加
         if user_id not in game.players:
-            return
+            game.players.append(user_id)
+            game.player_names[user_id] = nickname
         
         # 处理结束命令
         if text in ["结束", "结束游戏", "退出", "quit", "exit"]:
@@ -861,12 +839,11 @@ class WordMasterPlugin(Star):
         """处理 Wordle 猜测"""
         guess = guess.lower().strip()
         
+        # 长度不正确或非纯字母，静默返回不响应
         if len(guess) != len(game.answer):
-            yield event.plain_result(f"❌ 请输入 {len(game.answer)} 个字母的单词")
             return
         
         if not guess.isalpha():
-            yield event.plain_result("❌ 只能输入英文字母")
             return
         
         # 检查是否超时
@@ -930,17 +907,15 @@ class WordMasterPlugin(Star):
         
         # 移除所有空格和标点
         import re
-        guess = re.sub(r'[\s\p{P}]', '', guess)
+        guess = re.sub(r'[\s\u3000-\u303F\uFF00-\uFFEF]', '', guess)
         
-        # 检查长度（中文字符）
+        # 检查长度（中文字符），如果不是4个字符，静默返回不响应
         if len(guess) != 4:
-            yield event.plain_result(f"❌ 请输入四个汉字，当前输入: {len(guess)} 个字符")
             return
         
-        # 检查是否都是中文字符
+        # 检查是否都是中文字符，如果不是，静默返回不响应
         for char in guess:
             if not '\u4e00' <= char <= '\u9fff':
-                yield event.plain_result(f"❌ 输入包含非汉字字符: {char}")
                 return
         
         # 检查是否超时
