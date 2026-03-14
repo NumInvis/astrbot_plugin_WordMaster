@@ -777,7 +777,7 @@ class WordMasterPlugin(Star):
         
         yield event.plain_result(msg)
     
-    @filter.event_message()
+    @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         """处理游戏消息"""
         session_id = self._get_session_id(event)
